@@ -1,0 +1,84 @@
+name: Merge CFNat and CFST IPs
+
+on:
+  schedule:
+    - cron: '0 * * * *'  # 每小时执行一次
+  workflow_dispatch:
+    inputs:
+      files:
+        description: 'Space-separated source files to merge, in order (e.g. "cfnat.txt cfst_ips.txt")'
+        required: false
+        default: 'cfnat.txt cfst_ips.txt'
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Merge specified source files into yxURL.txt (inline, order-preserving, dedupe, overwrite)
+        run: |
+          set -euo pipefail
+
+          DST="yxURL.txt"
+          FILES="${{ github.event.inputs.files }}"
+
+          # 解析文件列表到数组
+          IFS=' ' read -r -a SRCS <<< "$FILES"
+
+          if [ "${#SRCS[@]}" -eq 0 ]; then
+            echo "No source files specified; nothing to do."
+            exit 0
+          fi
+
+          ARGS=()
+          for f in "${SRCS[@]}"; do
+            # 跳过空字符串（防止多余空格造成空项）
+            if [ -z "$f" ]; then
+              continue
+            fi
+            if [ ! -f "$f" ]; then
+              echo "Warning: source file '$f' not found — creating empty file to keep workflow stable."
+              touch "$f"
+            fi
+            ARGS+=("$f")
+          done
+
+          TMP="$(mktemp)"
+          # 按顺序读取所有源文件，去除空行并去重（保留首次出现顺序）
+          awk 'NF && !seen[$0]++ {print}' "${ARGS[@]}" > "$TMP"
+
+          # 确保以单个换行结束文件
+          if [ -s "$TMP" ]; then
+            tail -c1 "$TMP" | od -An -t u1 | tr -d ' ' | grep -q '^10$' || echo >> "$TMP"
+          fi
+
+          # 替换目标文件（始终由源文件生成的内容覆盖，而非追加到旧文件）
+          if [ ! -f "$DST" ] || ! cmp -s "$TMP" "$DST"; then
+            mv "$TMP" "$DST"
+            echo "Merged content written to $DST"
+            CHANGED=1
+          else
+            rm -f "$TMP"
+            echo "No changes detected; nothing to commit."
+            CHANGED=0
+          fi
+
+      - name: Commit and push changes (if any)
+        if: always()
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add yxURL.txt || true
+          if ! git diff --staged --quiet; then
+            git commit -m "Update yxURL.txt with merged content"
+            git push
+          else
+            echo "No changes to commit"
+          fi

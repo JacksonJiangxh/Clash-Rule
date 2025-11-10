@@ -8,7 +8,7 @@ on:
       files:
         description: 'Space-separated source files to merge, in order (e.g. "cfnat.txt cfst_ips.txt")'
         required: false
-        default: 'cfnat.txt cfst_ips.txt'
+        default: 'cfnat.txt cfst_ips.txt txyx.txt'
 
 jobs:
   merge:

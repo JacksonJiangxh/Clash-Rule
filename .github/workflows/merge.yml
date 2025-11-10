@@ -1,4 +1,5 @@
 name: Merge CFNat and CFST IPs
+
 on:
   push:
     branches: [main]
@@ -9,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       files:
-        description: 'Space-separated source files to merge, in order (e.g. "cfnat.txt cfst_ips.txt")'
+        description: 'Space-separated source files (uses default list if empty)'
         required: false
         default: 'cfnat.txt cfst_ips.txt txyx.txt'
 
@@ -18,60 +19,55 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Merge specified source files into yxURL.txt
+      - name: Merge files into yxURL.txt
         run: |
           set -euo pipefail
 
           DST="yxURL.txt"
-          # 如果文件在 default 目录下，需要添加路径前缀
+          # 获取文件列表：手动输入优先，否则使用默认值
           FILES="${{ github.event.inputs.files }}"
+          if [ -z "$FILES" ]; then
+            # push 事件触发时，自动过滤只保留存在的文件
+            FILES=""
+            for f in cfnat.txt cfst_ips.txt txyx.txt; do
+              [ -f "$f" ] && FILES="$FILES $f"
+            done
+          fi
 
           IFS=' ' read -r -a SRCS <<< "$FILES"
-
+          
           if [ "${#SRCS[@]}" -eq 0 ]; then
-            echo "No source files specified; nothing to do."
+            echo "No source files to process"
             exit 0
           fi
 
           ARGS=()
           for f in "${SRCS[@]}"; do
-            if [ -z "$f" ]; then
-              continue
+            [ -z "$f" ] && continue
+            if [ ! -f "$f" ]; then
+              echo "Warning: '$f' not found — creating empty file"
+              touch "$f"
             fi
-            # 如果文件在 default 目录下，使用完整路径
-            FILE_PATH="default/$f"
-            if [ ! -f "$FILE_PATH" ]; then
-              echo "Warning: source file '$FILE_PATH' not found — creating empty file."
-              mkdir -p default
-              touch "$FILE_PATH"
-            fi
-            ARGS+=("$FILE_PATH")
+            ARGS+=("$f")
           done
 
           TMP="$(mktemp)"
           awk 'NF && !seen[$0]++ {print}' "${ARGS[@]}" > "$TMP"
 
-          if [ -s "$TMP" ]; then
-            tail -c1 "$TMP" | od -An -t u1 | tr -d ' ' | grep -q '^10$' || echo >> "$TMP"
-          fi
+          [ -s "$TMP" ] && tail -c1 "$TMP" | od -An -t u1 | tr -d ' ' | grep -q '^10$' || echo >> "$TMP"
 
-          # 确保输出文件也在 default 目录
-          OUTPUT="default/$DST"
-          if [ ! -f "$OUTPUT" ] || ! cmp -s "$TMP" "$OUTPUT"; then
-            mv "$TMP" "$OUTPUT"
-            echo "Merged content written to $OUTPUT"
-            CHANGED=1
+          if [ ! -f "$DST" ] || ! cmp -s "$TMP" "$DST"; then
+            mv "$TMP" "$DST"
+            echo "Merged content written to $DST"
           else
             rm -f "$TMP"
-            echo "No changes detected; nothing to commit."
-            CHANGED=0
+            echo "No changes detected"
           fi
 
       - name: Commit and push changes
@@ -79,7 +75,7 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add default/yxURL.txt || true
+          git add yxURL.txt || true
           if ! git diff --staged --quiet; then
             git commit -m "Update yxURL.txt with merged content"
             git push
